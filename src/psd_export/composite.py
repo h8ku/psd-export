@@ -138,6 +138,11 @@ def flattened_tree(psd:WrappedLayer):
     sub(psd)
     return flat_list
 
+def iter_layer_tree(layer:WrappedLayer):
+    yield layer
+    for sublayer in layer.descendants():
+        yield sublayer
+
 def possible_dependencies(layer:WrappedLayer, flat_list):
     v = set()
     for sublayer in flat_list:
@@ -150,7 +155,7 @@ def possible_dependencies(layer:WrappedLayer, flat_list):
 
 def set_layer_extra_data(layer:WrappedLayer, tile_count, size):
     flat_list = flattened_tree(layer)
-    for sublayer in layer.descendants():
+    for sublayer in iter_layer_tree(layer):
         sublayer.visibility_dependency = get_visibility_dependency(sublayer, possible_dependencies(sublayer, flat_list))
         if sublayer.custom_op is not None:
             sublayer.custom_op_barrier = asyncio.Barrier(tile_count)
@@ -206,8 +211,15 @@ def set_cached_composite(layer:WrappedLayer, offset, tile_data):
     get_tile_cache(layer, layer.visibility_dependency)[offset] = tile_data
 
 def clear_count_mode(layer:WrappedLayer):
-    for sublayer in layer.descendants():
+    for sublayer in iter_layer_tree(layer):
         sublayer.composite_cache.clear()
+
+def clear_runtime_state(layer:WrappedLayer):
+    for sublayer in iter_layer_tree(layer):
+        sublayer.composite_cache.clear()
+        sublayer.composite_cache_counter.clear()
+        sublayer.data_cache.clear()
+        sublayer.data_cache_counter = 0
 
 async def get_cached_layer_data(layer:WrappedLayer, channel):
     async with layer.data_cache_lock:
@@ -489,6 +501,12 @@ async def composite_tile(psd:WrappedLayer, size, offset, color, alpha):
         await peval(lambda: blit(color, tile_color, offset))
         await peval(lambda: blit(alpha, tile_alpha, offset))
 
+async def composite_isolated_tile(layer:WrappedLayer, size, offset, color, alpha):
+    tile_color, tile_alpha = await composite_group_layer([layer], size, offset)
+    if tile_color is not None:
+        await peval(lambda: blit(color, tile_color, offset))
+        await peval(lambda: blit(alpha, tile_alpha, offset))
+
 def generate_tiles(size, tile_size):
     height, width = size
     tile_height, tile_width = tile_size
@@ -561,3 +579,21 @@ async def composite(psd:WrappedLayer, tile_size=blendfuncs.tile_size, count_mode
         return None
     else:
         return blendfuncs.to_bytes(color), blendfuncs.to_bytes(alpha)
+
+async def composite_isolated(layer:WrappedLayer, canvas_size, tile_size=blendfuncs.tile_size):
+    '''
+    Composite a single wrapped layer in isolation on the given canvas size and return
+    color (RGB) and alpha arrays trimmed to bytes.
+    '''
+    color = np.zeros(canvas_size + (3,), dtype=blendfuncs.dtype)
+    alpha = np.zeros(canvas_size + (1,), dtype=blendfuncs.dtype)
+
+    tiles = list(generate_tiles(canvas_size, tile_size))
+    clear_runtime_state(layer)
+    set_layer_extra_data(layer, len(tiles), canvas_size)
+
+    async with asyncio.TaskGroup() as tg:
+        for tile_size, tile_offset in tiles:
+            tg.create_task(composite_isolated_tile(layer, tile_size, tile_offset, color, alpha))
+
+    return blendfuncs.to_bytes(color), blendfuncs.to_bytes(alpha)
