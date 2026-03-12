@@ -62,8 +62,36 @@ def parse_tags(input):
 def fixed_primary_tag(tag):
     return tag if tag == '' else f'-{tag}'
 
+def sanitize_tag_for_path(tag):
+    if tag == '':
+        return tag
+
+    sanitized = []
+    for part in re.split(r'[\\/]+', tag.replace(':', '_')):
+        if part in ('', '.'):
+            continue
+        if part == '..':
+            sanitized.append('__')
+        else:
+            sanitized.append(part)
+
+    tag = '_'.join(sanitized)
+    return tag if tag else '_'
+
+def ensure_output_path_is_safe(base_file_name, output_path):
+    base_dir = base_file_name.parent.resolve()
+    try:
+        output_path.resolve(strict=False).relative_to(base_dir)
+    except ValueError as exc:
+        raise ValueError(
+            f'Unsafe export path {output_path} escapes {base_dir}. '
+            'Pass --allow-unsafe-paths to enable the old behavior.'
+        ) from exc
+
 def compute_file_name(base_file_name, config, enabled_tags):
     enabled_tags = [tag[0] for tag in enabled_tags]
+    if not config.allow_unsafe_paths:
+        enabled_tags = [sanitize_tag_for_path(tag) for tag in enabled_tags]
     if config.primary_sub:
         primary_tag = ''
         group_name = '-'.join(enabled_tags)
@@ -75,6 +103,8 @@ def compute_file_name(base_file_name, config, enabled_tags):
         next_file_name = next_file_name.parent / group_name / next_file_name.name
     else:
         next_file_name = base_file_name.with_stem(f'{base_file_name.stem}{primary_tag}-{group_name}')
+    if not config.allow_unsafe_paths:
+        ensure_output_path_is_safe(base_file_name, next_file_name)
     return next_file_name
 
 async def export_variant(psd, file_name, config, enabled_tags, count_mode):
@@ -218,6 +248,8 @@ arg_parser.add_argument('--output-type', default='png', type=str,
     help='Output type, whatever is supported by OpenCV, for example: png, jpg, webp, tiff.')
 arg_parser.add_argument('--file-name', default='*.psd', type=str,
     help='PSD files to process; can use a glob pattern.')
+arg_parser.add_argument('--allow-unsafe-paths', action='store_true', default=False,
+    help='Allow PSD tags to create output paths outside the PSD directory.')
 
 async def async_main():
     logging.basicConfig(

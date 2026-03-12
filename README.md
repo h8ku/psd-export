@@ -36,6 +36,8 @@ For my art workflow, I typically make a bunch variation layers and also need to 
   - A layer name can contain anything else outside of tags: `scene [1]`, which will be ignored.
 - Because whitespace is used to delimit arguments to filters, a tag's name will not include anything after a space, for example:
   - `[blur 50]` the tag name will be `blur`, and `50` is an argument to `blur`.
+- For safety, tag names are sanitized before they are used in output paths, so path separators and parent-directory traversal segments cannot escape the PSD's output directory by default.
+  - Pass `--allow-unsafe-paths` to restore the previous raw path behavior.
 - Each set of primary tagged layers will be turned on and off and then exported in turn.
   - That means multiple layers can have the same tag, so you can toggle layers in your foreground and background together, for example:
     - A layer named `foreground [1]` and a separate layer named `background [1]`
